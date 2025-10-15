@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StartUP Bingo | E-Cell</title>
+    <!-- Load Tailwind CSS for fast, responsive styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // Configure Tailwind to use our B/W/Y color palette and Inter font
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'accent-yellow': '#FFD700', // Bright, energetic yellow
+                        'dark-bg': '#121212', // Near-black background (Primary)
+                        'light-text': '#f3f4f6', // Light gray text (Contrast)
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                },
+            }
+        }
+    </script>
+    <style>
+        /* Base styles for a clean black-and-white look */
+        body {
+            background-color: theme('colors.dark-bg');
+            color: theme('colors.light-text');
+            font-family: theme('fontFamily.sans');
+            overflow-x: hidden; /* Prevent horizontal scroll */
+            scroll-behavior: smooth;
+            position: relative; /* Needed for absolute positioning of canvas */
+        }
+
+        /* FIX: Apply an invert filter to the logos to make them dark-mode compatible */
+        .dark-mode-logo {
+            filter: invert(1) grayscale(1) hue-rotate(220deg) saturate(10) brightness(1.5);
+        }
+
+        /* Canvas for the background particle effect */
+        #background-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0; /* Ensures content sits above the canvas */
+        }
+
+        /* Ensure main content sits above the background canvas */
+        #content-wrapper {
+            position: relative;
+            z-index: 10;
+        }
+
+        /* Styling for the main call-to-action buttons */
+        .cta-button {
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(255, 215, 0, 0.4);
+        }
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255, 215, 0, 0.6);
+        }
+
+        /* Modal overlay styling */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background-color: theme('colors.dark-bg');
+            border: 2px solid theme('colors.accent-yellow');
+            max-width: 90%;
+            width: 400px;
+            box-shadow: 0 10px 30px rgba(255, 215, 0, 0.5);
+        }
+
+        /* Simple animation keyframes for the tagline typing effect */
+        .typing-cursor::after {
+            content: '|';
+            animation: blink 1s step-end infinite;
+        }
+        @keyframes blink {
+            from, to { opacity: 1; }
+            50% { opacity: 0; }
+        }
+    </style>
+    
+    <script>
+        const REGISTRATION_REDIRECT_URL = 'https://xpedition-tech-bingo.vercel.app/';
+        const CONTACT_SECTION_ID = 'contact-section';
+        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    </script>
+</head>
+<body class="min-h-screen">
+
+    <!-- Background Canvas for Interactive Particle Network -->
+    <canvas id="background-canvas"></canvas>
+
+    <!-- Content Wrapper to ensure everything else is on top of the canvas -->
+    <div id="content-wrapper">
+        <!-- Firebase SDK Imports -->
+        <script type="module">
+            import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+            import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+            import { getFirestore, doc, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+            import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+            setLogLevel('Debug');
+
+            let db, auth, userId;
+            const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+
+            // Global function to ensure Firebase is initialized
+            async function initializeFirebase() {
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+
+                    // Authenticate the user (using custom token if available, otherwise anonymously)
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+
+                    userId = auth.currentUser?.uid || crypto.randomUUID();
+                    console.log("Firebase initialized. User ID:", userId);
+
+                } catch (error) {
+                    console.error("Firebase initialization or sign-in failed:", error);
+                    // Fallback to anonymous UUID if auth fails, though Firestore won't work
+                    userId = crypto.randomUUID();
+                }
+            }
+
+            // --- Core Application Logic ---
+
+            // 1. Typing Animation
+            function typingAnimation(element, text, delay = 70) { // Increased speed for better impact
+                let i = 0;
+                element.classList.add('typing-cursor');
+                function type() {
+                    if (i < text.length) {
+                        element.textContent += text.charAt(i);
+                        i++;
+                        setTimeout(type, delay);
+                    } else {
+                        element.classList.remove('typing-cursor');
+                    }
+                }
+                type();
+            }
+
+            // 2. Modal Controls
+            window.openModal = function() {
+                document.getElementById('registration-modal').style.display = 'flex';
+            }
+            window.closeModal = function() {
+                document.getElementById('registration-modal').style.display = 'none';
+            }
+
+            // 3. Form Submission Handler
+            window.handleRegistration = async function(event) {
+                event.preventDefault();
+                const form = event.target;
+                const submitButton = form.querySelector('button[type="submit"]');
+
+                // Simple Client-Side Validation
+                const data = {
+                    name: form.name.value.trim(),
+                    email: form.email.value.trim(),
+                    course: form.course.value.trim(),
+                    semester: form.semester.value.trim(),
+                    roll_number: form.roll_number.value.trim(),
+                    timestamp: serverTimestamp()
+                };
+
+                if (!Object.values(data).every(val => val !== '')) {
+                    showFeedback('All fields are required.', 'error');
+                    return;
+                }
+
+                submitButton.disabled = true;
+                submitButton.textContent = 'Submitting...';
+                showFeedback('Processing registration...', 'info');
+
+                try {
+                    // Ensure Firebase is ready before saving
+                    if (!db || !userId) {
+                        await initializeFirebase();
+                    }
+
+                    // Firestore Path: /artifacts/{appId}/users/{userId}/registrations/{documentId}
+                    const docRef = await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/registrations`), data);
+                    
+                    showFeedback('Success! Redirecting now...', 'success');
+                    console.log("Document written with ID: ", docRef.id);
+
+                    // FINAL STEP: Redirect user
+                    setTimeout(() => {
+                        window.location.href = REGISTRATION_REDIRECT_URL;
+                    }, 1000);
+
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                    showFeedback('Registration failed. Please check your connection.', 'error');
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Submit & Continue';
+                }
+            }
+            
+            // 4. Feedback Message Utility
+            function showFeedback(message, type) {
+                const feedbackEl = document.getElementById('form-feedback');
+                feedbackEl.textContent = message;
+                feedbackEl.className = 'text-center p-2 rounded-md mt-4';
+                if (type === 'error') feedbackEl.classList.add('bg-red-900', 'text-red-300');
+                else if (type === 'success') feedbackEl.classList.add('bg-green-900', 'text-green-300');
+                else feedbackEl.classList.add('bg-gray-700', 'text-gray-200');
+            }
+
+            // 5. Particle Network Animation Logic (Yellow on Black, Mouse Interactive)
+            const particles = [];
+            let canvas, ctx, mouse = { x: null, y: null, radius: 150 };
+            const particleColor = 'rgba(255, 215, 0, 0.5)'; // Yellow with transparency
+            const lineColor = 'rgba(255, 215, 0, 0.2)';
+
+            class Particle {
+                constructor(x, y, directionX, directionY, size) {
+                    this.x = x;
+                    this.y = y;
+                    this.directionX = directionX;
+                    this.directionY = directionY;
+                    this.size = size;
+                }
+
+                draw() {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                    ctx.fillStyle = particleColor;
+                    ctx.fill();
+                }
+
+                update() {
+                    // Check boundaries
+                    if (this.x > canvas.width || this.x < 0) this.directionX = -this.directionX;
+                    if (this.y > canvas.height || this.y < 0) this.directionY = -this.directionY;
+
+                    // Mouse interaction
+                    const dx = mouse.x - this.x;
+                    const dy = mouse.y - this.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < mouse.radius) {
+                        // Push particle away from mouse
+                        const forceDirectionX = dx / distance;
+                        const forceDirectionY = dy / distance;
+                        const maxSpeed = 3;
+                        const force = (mouse.radius - distance) / mouse.radius;
+                        const directionX = forceDirectionX * force * maxSpeed;
+                        const directionY = forceDirectionY * force * maxSpeed;
+
+                        this.x -= directionX;
+                        this.y -= directionY;
+                    }
+
+                    // Normal movement
+                    this.x += this.directionX;
+                    this.y += this.directionY;
+                    this.draw();
+                }
+            }
+
+            function initParticles() {
+                particles.length = 0;
+                // Reduce particle count slightly for better mobile performance
+                for (let i = 0; i < (canvas.width * canvas.height) / 10000; i++) { 
+                    const size = (Math.random() * 3) + 0.5;
+                    const x = Math.random() * (canvas.width - size * 2) + size;
+                    const y = Math.random() * (canvas.height - size * 2) + size;
+                    const directionX = (Math.random() * 0.4) - 0.2;
+                    const directionY = (Math.random() * 0.4) - 0.2;
+                    particles.push(new Particle(x, y, directionX, directionY, size));
+                }
+            }
+
+            function connectParticles() {
+                for (let a = 0; a < particles.length; a++) {
+                    for (let b = a; b < particles.length; b++) {
+                        const dist = Math.sqrt(
+                            (particles[a].x - particles[b].x) ** 2 + 
+                            (particles[a].y - particles[b].y) ** 2
+                        );
+
+                        // Connect only nearby particles
+                        if (dist < 100) {
+                            ctx.strokeStyle = lineColor;
+                            ctx.lineWidth = 1;
+                            ctx.beginPath();
+                            ctx.moveTo(particles[a].x, particles[a].y);
+                            ctx.lineTo(particles[b].x, particles[b].y);
+                            ctx.stroke();
+                        }
+                    }
+                }
+            }
+
+            function animateParticles() {
+                requestAnimationFrame(animateParticles);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                for (let i = 0; i < particles.length; i++) {
+                    particles[i].update();
+                }
+                connectParticles();
+            }
+
+            function setupCanvas() {
+                canvas = document.getElementById('background-canvas');
+                ctx = canvas.getContext('2d');
+                
+                // Set initial size
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+
+                // Handle resize
+                window.addEventListener('resize', () => {
+                    canvas.width = window.innerWidth;
+                    canvas.height = window.innerHeight;
+                    initParticles();
+                });
+
+                // Handle mouse movement for interaction
+                window.addEventListener('mousemove', (e) => {
+                    mouse.x = e.x;
+                    mouse.y = e.y;
+                });
+
+                // Initialize and start animation
+                initParticles();
+                animateParticles();
+            }
+
+            // 6. Initialize App and Attach Event Listeners
+            window.addEventListener('load', async () => {
+                await initializeFirebase();
+                setupCanvas(); // Start the background animation
+
+                // Start the typing animation once the page is loaded
+                const taglineElement = document.getElementById('typing-tagline');
+                if (taglineElement) {
+                    taglineElement.textContent = ''; // Clear initial text
+                    typingAnimation(taglineElement, "Where Ideas Take Life");
+                }
+
+                // Smooth scroll for Contact Us link
+                document.getElementById('contact-link').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const target = document.getElementById(CONTACT_SECTION_ID);
+                    if (target) {
+                        target.scrollIntoView({ behavior: 'smooth' });
+                    }
+                });
+            });
+        </script>
+    </div>
+
+    <!-- Header & Navigation -->
+    <header class="sticky top-0 z-50 p-4 border-b border-gray-900 bg-dark-bg/90 backdrop-blur-sm">
+        <nav class="flex items-center justify-between max-w-6xl mx-auto">
+            <!-- Left: Logos - ADDED dark-mode-logo filter -->
+            <div class="flex items-center space-x-4">
+                <img src="uploaded:COE Logo.png-267296a1-f4e3-453d-a5ab-326b477cfd5e" alt="CGC-COE Logo" class="h-10 rounded dark-mode-logo">
+                <img src="uploaded:E-Cell_CGC-COE.png-6d37d7ce-b4df-46bf-9079-b52071a73918" alt="E-Cell Logo" class="h-10 rounded dark-mode-logo">
+            </div>
+            
+            <!-- Right: Action Buttons -->
+            <div class="flex items-center space-x-3">
+                <button onclick="window.openModal()" class="hidden md:block px-4 py-2 text-sm font-semibold bg-accent-yellow text-dark-bg rounded-lg cta-button">
+                    Enter Startup Bingo
+                </button>
+                <a href="#contact-section" id="contact-link" class="px-4 py-2 text-sm font-semibold border-2 border-gray-200 text-gray-200 rounded-lg hover:border-accent-yellow hover:text-accent-yellow transition-colors duration-300">
+                    Contact Us
+                </a>
+            </div>
+        </nav>
+    </header>
+
+    <!-- 1. Hero Section -->
+    <main class="min-h-[calc(100vh-6rem)] flex items-center justify-center text-center p-8">
+        <div class="max-w-4xl">
+            <h1 class="text-4xl sm:text-6xl md:text-8xl font-extrabold tracking-tight text-gray-200 mb-4">
+                <span class="block text-accent-yellow">StartUP Bingo</span>
+                <span class="block text-gray-400 text-3xl sm:text-5xl md:text-6xl mt-4">E-Cell</span>
+            </h1>
+            
+            <p id="typing-tagline" class="min-h-[1.5em] text-lg sm:text-xl md:text-2xl font-mono text-gray-200 mt-6 mb-12">
+                <!-- Text will be filled by the typingAnimation JS -->
+            </p>
+
+            <!-- Primary CTA - Triggers Modal -->
+            <button onclick="window.openModal()" class="cta-button px-12 py-4 text-xl font-bold rounded-xl bg-accent-yellow text-dark-bg shadow-lg hover:scale-[1.03] transition transform">
+                Register Now
+            </button>
+        </div>
+    </main>
+
+    <!-- 2. Footer / Contact Section (Contact Us Target) -->
+    <footer id="contact-section" class="bg-dark-bg border-t border-gray-900 p-8 sm:p-12 mt-16">
+        <div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8 text-center md:text-left">
+            
+            <!-- Location -->
+            <div>
+                <h3 class="text-xl font-semibold text-accent-yellow mb-3">Location</h3>
+                <p class="text-gray-400">
+                    CGC College of Engineering<br>
+                    Landran, Mohali, Punjab<br>
+                    India - 140307
+                </p>
+            </div>
+            
+            <!-- Contact Email -->
+            <div>
+                <h3 class="text-xl font-semibold text-accent-yellow mb-3">Get in Touch</h3>
+                <a href="mailto:ecell@coecgc.ac.in" class="text-gray-200 hover:text-accent-yellow transition-colors duration-300">
+                    ecell@coecgc.ac.in
+                </a>
+                <p class="text-gray-400 mt-2">
+                    (Your dedicated E-Cell support email)
+                </p>
+            </div>
+            
+            <!-- Social Media -->
+            <div>
+                <h3 class="text-xl font-semibold text-accent-yellow mb-3">Follow Us</h3>
+                <div class="flex justify-center md:justify-start space-x-4">
+                    <!-- Instagram Icon Placeholder (Using a simple link) -->
+                    <a href="https://www.instagram.com/your_ecell_instagram" target="_blank" rel="noopener noreferrer" 
+                       class="text-gray-200 hover:text-accent-yellow transition-colors duration-300 text-2xl" aria-label="E-Cell Instagram">
+                       &#10026; Instagram
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-12 pt-8 border-t border-gray-900 text-center text-sm text-gray-500">
+            &copy; 2024 E-Cell CGC-COE. All rights reserved.
+        </div>
+    </footer>
+
+
+    <!-- Registration Modal -->
+    <div id="registration-modal" class="modal-overlay">
+        <div class="modal-content p-6 rounded-xl relative">
+            <button onclick="window.closeModal()" class="absolute top-3 right-3 text-gray-200 hover:text-accent-yellow text-2xl leading-none">&times;</button>
+            
+            <h2 class="text-2xl font-bold text-accent-yellow mb-4 text-center">Event Registration</h2>
+            <p class="text-sm text-gray-400 mb-6 text-center">Fill out the form to proceed to Startup Bingo.</p>
+            
+            <form onsubmit="window.handleRegistration(event)">
+                <div class="space-y-4">
+                    <!-- Input fields are already dark bg-gray-800 -->
+                    <input type="text" name="name" placeholder="Full Name" required
+                           class="w-full p-3 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 focus:ring-accent-yellow focus:border-accent-yellow">
+                    
+                    <!-- Email -->
+                    <input type="email" name="email" placeholder="College Email ID" required
+                           class="w-full p-3 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 focus:ring-accent-yellow focus:border-accent-yellow">
+                    
+                    <!-- Course -->
+                    <input type="text" name="course" placeholder="Course (e.g., B.Tech CSE)" required
+                           class="w-full p-3 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 focus:ring-accent-yellow focus:border-accent-yellow">
+                    
+                    <!-- Semester -->
+                    <input type="text" name="semester" placeholder="Semester (e.g., 5th)" required
+                           class="w-full p-3 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 focus:ring-accent-yellow focus:border-accent-yellow">
+                    
+                    <!-- Roll Number -->
+                    <input type="text" name="roll_number" placeholder="Roll Number" required
+                           class="w-full p-3 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 focus:ring-accent-yellow focus:border-accent-yellow">
+                </div>
+                
+                <p id="form-feedback" class="mt-4 text-sm"></p>
+
+                <button type="submit" 
+                        class="mt-6 w-full py-3 font-semibold rounded-lg bg-accent-yellow text-dark-bg cta-button">
+                    Submit & Continue
+                </button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
