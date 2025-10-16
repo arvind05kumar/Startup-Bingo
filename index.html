@@ -98,7 +98,11 @@
     </style>
     
     <script>
+        // Redirect URL (as requested by the user)
         const REGISTRATION_REDIRECT_URL = 'https://xpedition-tech-bingo.vercel.app/';
+        // SheetBest API URL (as provided by the user)
+        const SHEETBEST_API_URL = "https://api.sheetbest.com/sheets/dae40db8-8db5-4094-bb6e-691865b3b980";
+
         const CONTACT_SECTION_ID = 'contact-section';
         const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
     </script>
@@ -172,7 +176,7 @@
                 document.getElementById('registration-modal').style.display = 'none';
             }
 
-            // 3. Form Submission Handler
+            // 3. Form Submission Handler (UPDATED FOR SHEETBEST API)
             window.handleRegistration = async function(event) {
                 event.preventDefault();
                 const form = event.target;
@@ -185,7 +189,6 @@
                     course: form.course.value.trim(),
                     semester: form.semester.value.trim(),
                     roll_number: form.roll_number.value.trim(),
-                    timestamp: serverTimestamp()
                 };
 
                 if (!Object.values(data).every(val => val !== '')) {
@@ -198,25 +201,53 @@
                 showFeedback('Processing registration...', 'info');
 
                 try {
-                    // Ensure Firebase is ready before saving
-                    if (!db || !userId) {
-                        await initializeFirebase();
+                    // --- 1. Save data to Google Sheet (SheetBest) - Primary Goal ---
+                    const sheetData = {
+                        Name: data.name,
+                        Email: data.email,
+                        Course: data.course,
+                        Semester: data.semester,
+                        'Roll Number': data.roll_number, // Matching expected sheet columns
+                        Timestamp: new Date().toISOString()
+                    };
+
+                    const sheetResponse = await fetch(SHEETBEST_API_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(sheetData)
+                    });
+
+                    if (!sheetResponse.ok) {
+                        throw new Error(`Sheet submission failed with status: ${sheetResponse.status}`);
                     }
+                    console.log("Data successfully logged to Google Sheet via SheetBest.");
 
-                    // Firestore Path: /artifacts/{appId}/users/{userId}/registrations/{documentId}
-                    const docRef = await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/registrations`), data);
+
+                    // --- 2. Save data to Firestore (Backup) ---
+                    // This block runs after SheetBest to ensure data redundancy.
+                    try {
+                        if (!db || !userId) {
+                            await initializeFirebase();
+                        }
+                        const firestoreData = { ...data, timestamp: serverTimestamp() };
+                        await addDoc(collection(db, `artifacts/${APP_ID}/users/${userId}/registrations`), firestoreData);
+                        console.log("Data successfully logged to Firestore backup.");
+                    } catch (e) {
+                        console.error("Warning: Firestore backup failed.", e);
+                        // Do NOT throw, as the SheetBest save (primary goal) succeeded.
+                    }
                     
+                    // --- 3. Final Step: Redirect user as requested ---
                     showFeedback('Success! Redirecting now...', 'success');
-                    console.log("Document written with ID: ", docRef.id);
-
-                    // FINAL STEP: Redirect user
                     setTimeout(() => {
                         window.location.href = REGISTRATION_REDIRECT_URL;
-                    }, 1000);
+                    }, 500); // Give user a brief moment to see success before redirecting
 
                 } catch (e) {
-                    console.error("Error adding document: ", e);
-                    showFeedback('Registration failed. Please check your connection.', 'error');
+                    console.error("Error during registration process: ", e);
+                    showFeedback('Registration failed. Please check sheet API or network.', 'error');
                     submitButton.disabled = false;
                     submitButton.textContent = 'Submit & Continue';
                 }
